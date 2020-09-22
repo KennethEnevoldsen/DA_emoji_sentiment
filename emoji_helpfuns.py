@@ -4,8 +4,20 @@ a variety of helpful function for dealing with emojis
 
 import regex
 import types
+from collections import Counter
 
 import emoji
+
+from utils import chunk
+
+
+# GENERAL
+def print_emoji_grid(emoji_list, shape=(20, 10), sep="  "):
+    e_chunks = chunk(emoji_list, size=shape[0])
+    for i, pl in [(i, sep.join(c)) for i, c in enumerate(e_chunks)]:
+        if i % shape[1] == 0:
+            print("\n")
+        print(pl)
 
 
 def is_emoji(char):
@@ -139,8 +151,26 @@ def filter_emoji_column(df, col="text"):
     """
     if isinstance(df, (list, filter, types.GeneratorType)):
         return (filter_emoji_column(d) for d in df)
-    df = df.loc[df["col"].apply(contains_emoji)]
+    df = df.loc[df[col].apply(contains_emoji)]
     return df
+
+
+# SPECIFIC
+def create_emoji_count(df, unique_pr_post=True, verbose=False):
+    if isinstance(df, (list, filter, types.GeneratorType)):
+        counts = Counter()
+        for i, d in enumerate(df):
+            if verbose:
+                print(f"Currently at {i}")
+            counts += create_emoji_count(d)
+        return counts
+    counts = Counter()
+    for i in df["emoji"]:
+        emojis = split_by_emoji(i)
+        if unique_pr_post:
+            emojis = set(emojis)
+        counts += Counter(emojis)
+    return counts
 
 
 if __name__ == "__main__":
