@@ -2,15 +2,17 @@
 """
 import json
 import os
+import types
 
 from collections import Counter
 
 import pandas as pd
+import numpy as np
 
 from gensim.models import KeyedVectors
 
 from utils import counter_to_df
-from emoji_helpfuns import print_emoji_grid, create_emoji_count
+from emoji_helpfuns import print_emoji_grid, create_emoji_count, split_by_emoji
 from make_corpus import get_filenames, df_gen
 
 
@@ -19,27 +21,40 @@ def read_e2v(path="pre-trained_e2v/emoji2vec.bin", binary=True, **kwargs):
     return e2v
 
 
-def map_emoji(emoji, mapping,
+def map_emoji(emoji, mapping, count,
               use_e2v=True,
-              boundary=0.9,
-              topn=10,
+              boundary=0.7,
+              topn=20,
               loc_e2v="pre-trained_e2v/emoji2vec.bin",
+              raise_error=False,
+              print_most_sim=False,
               **kwargs):
     if use_e2v:
         e2v = read_e2v(loc_e2v, **kwargs)
 
     if emoji in mapping:
-        return mapping[emoji]
+        emoji = mapping[emoji]
+    if emoji in count:
+        return emoji
+
     elif use_e2v and (emoji in e2v):
-        sim = zip(*e2v.most_similar(emoji, topn=topn))
+        sim = e2v.most_similar(emoji, topn=topn)
+
+        if print_most_sim:
+            [print(e, "\t", score) for e, score in sim]
+
         for e, score in sim:
-            if e in mapping:
-                if boundary and (sim < boundary):
-                    raise Exception(f"Could not replace the emoji ({emoji}) with {e} \
-                        as the similarity ({sim}) < boundary")
-                return mapping[e]
-    raise Exception("Emoji not in mapping and either e2v is set to false or \
-        the emoji is not defined in the top {topn} of most similar e2v")
+            if (e in count) or (e in mapping and mapping[e] in count):
+                if boundary and (score < boundary):
+                    if raise_error:
+                        raise Exception(f"Could not replace the emoji ({emoji}) with {e} \
+                            as the similarity ({score}) < boundary")
+                    return None
+                return mapping[e] if e in mapping else e
+    if raise_error:
+        raise Exception("Emoji not in mapping and either e2v is set to false or \
+            the emoji is not defined in the top {topn} of most similar e2v")
+    return None
 
 
 def create_emoji_mapping(emoji_desc, rev_emoji_desc, emoji_type, collapse_to, mapping={}, ignore=[]):
@@ -168,10 +183,11 @@ def create_mapping(emoji_count, topn=128, verbose=True):
     if verbose:
         n_included = sum(n for e, n in emoji_count_.most_common(topn))
         p = n_included / sum(emoji_count_.values())
-        print(f"The coverage of the emojis is {round(p, 2)} and include:")
+        print(f"The coverage of the emojis is {round(p, 4)} and include:")
         df = counter_to_df(emoji_count_)
         print_emoji_grid(df["Value"][:topn], shape=(20, 10))
 
+    emoji_count_ = Counter({e: n for e, n in emoji_count_.most_common(topn)})
     return emoji_count_, mapping
 
 
@@ -217,20 +233,120 @@ def print_same_meaning_different_unicode(emoji):
     [print(e) for e, d in emoji_desc.items() if d == emoji_desc[emoji]]
 
 
+def replace_emoji(text, count, mapping, simple=False):
+    """
+    simple is about twice as fast
+
+    Example:
+    >>> text = "💥💥💞🤦‍♂️"
+    >>> # replace_emoji(text, count, mapping)
+    """
+    if isinstance(text, (list, filter, types.GeneratorType, np.ndarray)):
+        if simple:
+            return (replace_emoji(t, count, mapping, simple=True)
+                    for t in text)
+        removed = Counter()
+        mapped_vals = Counter()
+        result = []
+        for i, t in enumerate(text):
+            print(f"currently at {i}/{len(text)}")
+            res, rem, mapped = replace_emoji(t, count, mapping,
+                                             simple=False)
+            removed += rem
+            mapped_vals += mapped
+            result.append(res)
+        return res, removed, mapped_vals
+
+    if simple:
+        return "".join(map_emoji(emoji=e, mapping=mapping, count=count,
+                                 use_e2v=True)
+                       for e in split_by_emoji(text))
+
+    res = ""
+    removed = Counter()
+    mapped_vals = Counter()
+    for e in split_by_emoji(text):
+        e_ = map_emoji(emoji=e, mapping=mapping, count=count, use_e2v=True)
+        if e_ is None:
+            removed[e] += 1
+            continue
+        res += e
+        if e != e_:
+            mapped_vals[(e, e_)] += 1
+    return res, removed, mapped_vals
+
+
+def replace_emoji_df(df, count, mapping, emoji_col="emoji", save_counter=True,
+                     save_paths=["removed_emojis.json", "matched_emojis.json"]):
+    if isinstance(df, (list, filter, types.GeneratorType)):
+        if save_counter:
+            removed = Counter()
+            mapped_vals = Counter()
+
+            for d in df:
+                res, rem, mapped = replace_emoji(d[emoji_col].values,
+                                                 count, mapping)
+                removed += rem
+                mapped_vals += mapped
+                d[emoji_col] = res
+                yield d
+            with open(save_paths[0], "w") as f:
+                json.dump(removed, f)
+            with open(save_paths[1], "w") as f:
+                json.dump({str(k): v for k, v, in mapped_vals.items()}, f)
+
+        return (replace_emoji(d[emoji_col], count, mapping, simple=True)
+                for d in df)
+
+    if save_counter:
+        res, removed, mapped_vals = replace_emoji(df[emoji_col].values, count,
+                                                  mapping)
+        df[emoji_col] = res
+        return df, removed, mapped_vals
+    res = replace_emoji(df[emoji_col].values, count,
+                        mapping, simple=True)
+    df[emoji_col] = res
+    return df
+
+
+def collapse_emojis_in_data(count, mapping, path="data",
+                            save_suf="clustered.json",
+                            overwrite=False):
+    files = [f for f in get_filenames(path, endswith=".json")
+             if not f.endswith(save_suf)]
+
+    if not overwrite:
+        sav_files_n = [f.split(".")[0].split("_")[1]
+                       for f in get_filenames(path, endswith=save_suf)]
+        sav_files_n = set(sav_files_n)
+        files = [f for f in files
+                 if f.split(".")[0].split("_")[1] not in sav_files_n]
+
+    dfs = df_gen(files, reader=pd.read_json)
+    dfs = filter_lang(dfs, verbose=False)
+    dfs = replace_emoji_df(dfs, count, mapping)
+
+    for i, df in enumerate(dfs):
+        df.to_json(f"emoji_{i}"+save_suf)
+
+
 def main():
-    count = make_emojicount(write=True, rerun=False)
-    count, mapping = create_mapping(emoji_count=count, topn=200)
-    count.most_common(300)
-    mapping["🤦‍♂"] == mapping["🤦‍♂️"]
-    e2v.most_similar(mapping["☝️"])
-    map_emoji(emoji="🤦‍♂", mapping=mapping, use_e2v=False)
-    map_emoji("🤦‍♂️", mapping=mapping, use_e2v=False)
+    count_ = make_emojicount(write=True, rerun=False)
+    count, mapping = create_mapping(emoji_count=count_, topn=150)
+    collapse_emojis_in_data(count, mapping)
+
+    # examine
+    # df = counter_to_df(count_)
+    # print_emoji_grid(df["Value"][:500], shape=(20, 10))
+
+    # count.most_common()[140:150]
+    # mapping["🤦‍♂"] == mapping["🤦‍♂️"]
+    # e2v.most_similar("🍆")
+    # map_emoji(emoji="🤦‍♂", mapping=mapping, use_e2v=False)
+    # map_emoji("🤦‍♂️", mapping=mapping, use_e2v=False)
+    # map_emoji("🤦‍♂️", mapping=mapping, use_e2v=False)
+    # map_emoji(emoji="😘", mapping=mapping, use_e2v=True, print_most_sim=True)
 
 
-👏👍
-
-"🤦‍♂" == "🤦‍♂️"
-emoji_desc[mapping["👍"]]
-print_same_meaning_different_unicode("👎")
-"🤦"
-print_emoji_grid(df["Value"][:topn], shape=(20, 10))
+if __name__ == "__main__":
+    main()
