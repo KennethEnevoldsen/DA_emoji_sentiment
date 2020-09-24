@@ -6,12 +6,10 @@ sentences pairs are collapsed into one dataframe and saved as a json
 """
 import os
 import types
-from functools import partial
 
 import pandas as pd
 
-from emoji_helpfuns import filter_emoji_column, emoji_sent_pair, \
-    create_emoji_count
+from emoji_utils import filter_emoji_column, emoji_sent_pair
 from utils import chunk
 
 
