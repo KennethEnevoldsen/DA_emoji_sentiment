@@ -133,3 +133,4 @@ dmypy.json
 
 # other
 data
+*clustered.json
