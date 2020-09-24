@@ -74,6 +74,7 @@ def extract_emoji(text):
 def split_by_emoji(text, return_emojis=True, filter_texts={" "}):
     """
     text (str|list)
+    return_emojis (bool)
     splits a text by emoji
 
     Example:
@@ -155,19 +156,23 @@ def filter_emoji_column(df, col="text"):
     return df
 
 
-# SPECIFIC
-def create_emoji_count(df, unique_pr_post=True, verbose=False):
-    if isinstance(df, (list, filter, types.GeneratorType)):
-        counts = Counter()
-        for i, d in enumerate(df):
-            if verbose:
-                print(f"Currently at {i}")
-            counts += create_emoji_count(d)
-        return counts
+def create_emoji_count(texts, binary=True, verbose=False):
+    """
+    texts iterable object containing string
+    binary (bool): should you only count each emoji once
+
+    Example:
+    >>> texts = ["a text with some 🙏🏼🙏🙏  emoji in 🤷🏼",
+                 "💰  🤯  🇳🇴  ✨  🥴  😐  🔴  🤓  🎉"]
+    >>> create_emoji_count(texts, binary=False)
+    """
     counts = Counter()
-    for i in df["emoji"]:
-        emojis = split_by_emoji(i)
-        if unique_pr_post:
+    for t in texts:
+        emojis = split_by_emoji(t)
+        # remove non emojis
+        emojis = filter(lambda x: x and x in emoji.UNICODE_EMOJI, emojis)
+        emoji.UNICODE_EMOJI
+        if binary:
             emojis = set(emojis)
         counts += Counter(emojis)
     return counts
@@ -175,5 +180,4 @@ def create_emoji_count(df, unique_pr_post=True, verbose=False):
 
 if __name__ == "__main__":
     import doctest
-
     doctest.testmod(verbose=True)
