@@ -51,15 +51,19 @@ def make_emojicount(path="emoji_usage_nordic.json", rerun=False, write=True):
     return count
 
 
-def replace_emoji_df(df, ec, emoji_col="emoji"):
+def replace_emoji_df(dfs, ec, emoji_col="emoji"):
     """
     ec (EmojiCluster): fitted
     """
-    if isinstance(df, (list, filter, types.GeneratorType)):
-        return (replace_emoji_df(d, ec=ec) for d in df)
-    df[emoji_col] = ["".join(set(ec.replace_emoji(t)))
-                     for t in df[emoji_col].values]
-    return df[df[emoji_col].astype(bool)]
+    emoji2onehot = {e: i+1 for i, e in enumerate(ec.get_emoji_count().keys())}
+
+    with open("emoji2onehot.json", "w") as f:
+        json.dump(emoji2onehot, f)
+
+    for df in dfs:
+        tmp = (set(ec.replace_emoji(t)) for t in df[emoji_col].values)
+        df[emoji_col] = [[emoji2onehot[e] for e in e_set] for e_set in tmp]
+        yield df[df[emoji_col].astype(bool)]
 
 
 def replace_urls_df(df):
@@ -71,25 +75,18 @@ def replace_urls_df(df):
     return df
 
 
-# REMOVE
-def reader_fun(f):
-    df = pd.read_json(f)
-    return df.head(200)
-
-
-def main(overwrite=False, path="data", save_suf="clustered.json"):
+def main(path="data", save_suf="clustered.json"):
     files = [f for f in get_filenames(path, endswith=".json")
              if not f.endswith(save_suf)]
 
-    if not overwrite:
-        sav_files_n = [f.split(".")[0].split("_")[1]
-                       for f in get_filenames(path, endswith=save_suf)]
-        sav_files_n = set(sav_files_n)
-        files = [f for f in files
-                 if f.split(".")[0].split("_")[1] not in sav_files_n]
+    # if not overwrite:
+    #     sav_files_n = [f.split(".")[0].split("_")[1]
+    #                    for f in get_filenames(path, endswith=save_suf)]
+    #     sav_files_n = set(sav_files_n)
+    #     files = [f for f in files
+    #              if f.split(".")[0].split("_")[1] not in sav_files_n]
 
-    files = files[:2]  # REMOVE
-    dfs = df_gen(files, reader=reader_fun)  # replace with pd.read_json
+    dfs = df_gen(files, reader=pd.read_json)
     dfs = filter_lang(dfs, verbose=False)
     dfs = replace_urls_df(dfs)
 
@@ -100,18 +97,18 @@ def main(overwrite=False, path="data", save_suf="clustered.json"):
     ec.fit(topn=150, corpus=None, counter=count)
 
     dfs = replace_emoji_df(dfs, ec=ec)
+    df = pd.concat(list(dfs))
+    df = df.reset_index()
+    df.to_json(f"{path}/emoji_sent_clustered.json")
 
+    # for i, df in enumerate(dfs):
+    #     if i % 20 == 0:
+    #         with open("matched_emojis.json", "w") as f:
+    #             json.dump({str(k): v for k, v, in ec.mapped_emojis.items()}, f)
+    #     df.to_json(f"{path}/emoji_{i}"+save_suf)
     with open("matched_emojis.json", "w") as f:
-        json.dump({str(k): v for k, v, in mapped_vals.items()}, f)
-    ec.mapped_emojis
-    # REMOVE
-    df = next(dfs)
-    list(df)
-    df
-
-    for i, df in enumerate(dfs):
-        df.to_json(f"{path}/emoji_{i}"+save_suf)
+        json.dump({str(k): v for k, v, in ec.mapped_emojis.items()}, f)
 
 
 if __name__ == "__main__":
-    main(overwrite=True)
+    main()
