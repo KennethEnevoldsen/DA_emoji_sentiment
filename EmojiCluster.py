@@ -43,7 +43,7 @@ def print_same_meaning_different_unicode(emoji):
 
 class EmojiCluster():
     def __init__(self, mapping=["unicode", "color", "flag", "family"],
-                 ignore={}, e2v=True, **kwargs):
+                 ignore={}, e2v=True, verbose=False, **kwargs):
         """
         e2v (bool | gensim KeyedVectors): Should you use emoji2vec to cluster
         unknown emoji's? Allows for passing of a used specified emoji
@@ -75,10 +75,12 @@ class EmojiCluster():
         >>> '💰' in ec.get_emoji_count()
         False
         """
-        self.ignore = ignore
         self.emoji_count = None
         self.isfit = False
         self.mapped_emojis = Counter()
+        self.skin_tones = {"light skin tone", "medium-light skin tone",
+                           "medium skin tone", "medium-dark skin tone",
+                           "dark skin tone"}
 
         if e2v is False:
             self.__use_e2v = False
@@ -92,19 +94,37 @@ class EmojiCluster():
             e2v=True, **kwargs)
 
         if ignore is None:
-            ignore = {}
+            self.ignore = {}
         if isinstance(ignore, list):
-            ignore = {e: e for e in ignore}
+            self.ignore = {e: e for e in ignore}
 
-        self.__mapping_methods = {"unicode": self.__unicode_mapping,
-                                  "color": self.__color_mapping,
-                                  "flag": partial(self.update_mapping,
-                                                  emoji_type="flag:",
-                                                  collapse_to="flag"),
-                                  "family": partial(self.update_mapping,
-                                                    emoji_type="family:",
-                                                    collapse_to="👪")}
-        self.mapping = ignore
+        self.__mapping_methods = {
+            "unicode": self.__unicode_mapping,
+            "color": partial(self.__color_mapping,
+                             ignore=self.ignore,
+                             verbose=verbose),
+            "flag": partial(self.update_mapping,
+                            emoji_type="flag:",
+                            collapse_to="flag",
+                            ignore=self.ignore),
+            "family": partial(self.update_mapping,
+                              emoji_type="family:",
+                              collapse_to="👪",
+                              ignore=self.ignore),
+            "couple with heart": partial(self.update_mapping,
+                                         emoji_type="couple with heart:",
+                                         collapse_to="👩‍❤️‍👨",
+                                         ignore=self.ignore),
+            "kiss": partial(self.update_mapping,
+                            emoji_type="kiss:",
+                            collapse_to="👩‍❤️‍💋‍👨",
+                            ignore=self.ignore),
+            "keycap": partial(self.update_mapping,
+                              emoji_type="keycap:",
+                              collapse_to="#️⃣",
+                              ignore=self.ignore)
+        }
+        self.mapping = self.ignore.copy()
 
         # update mapping
         for m in mapping:
@@ -114,8 +134,7 @@ class EmojiCluster():
                 raise ValueError(f"Mapping {m} not a valid mapping. Use update \
                                  mapping for user specified mapping update")
 
-    def update_mapping(self, emoji_type, collapse_to, ignore=[],
-                       overwrite=False):
+    def update_mapping(self, emoji_type, collapse_to, ignore=[]):
         """
         emoji_type (str | set): emoji type for instance "family" or "flag"
         collapse_to (str | set): what emoji should it collapse to
@@ -138,49 +157,46 @@ class EmojiCluster():
                               collapse_to="👪")
         """
         for desc, e in self.rev_emoji_desc.items():
+            if e in ignore:
+                continue
             if emoji_type in desc:
-                descr = desc.split(": ")[1]
-                if descr in ignore:
-                    continue
-                if (descr in self.mapping) and (overwrite is False):
-                    continue
                 self.mapping[e] = collapse_to
 
-    def __color_mapping(self, ignore=[], overwrite=False):
+    def __color_mapping(self, ignore=[], verbose=False, **kwargs):
         """
         creates a mapping which maps emoji with defined hair color and skin
         tone into the classic yellow emoji.
         """
-        skin_tones = {"light skin tone", "medium-light skin tone",
-                      "medium skin tone", "medium-dark skin tone",
-                      "dark skin tone"}
-        skin_tones = {st for st in skin_tones if st not in ignore}
+        skin_tones = {st for st in self.skin_tones if st not in ignore}
 
         for e_, desc in self.emoji_desc.items():
+            if e_ in ignore:
+                continue
+            if e_ in self.mapping:
+                continue
             for tone in skin_tones:
                 if tone in desc:
                     # if it is a color
                     if desc in skin_tones:
                         continue
-                    if (desc in self.mapping) and (overwrite is False):
-                        continue
                     d, tmp = desc.split(":")
                     e = self.rev_emoji_desc[d]
                     self.mapping[e_] = e
 
-    def __unicode_mapping(self, overwrite=False):
+    def __unicode_mapping(self):
         """
         creates a mapping between unicode smiley with the same description,
         but different unicode.
         """
         for e, desc in self.emoji_desc.items():
+            if e in self.mapping:
+                continue
             matches = {e: d for e, d in self.emoji_desc.items() if d == desc}
             if len(matches) > 1:
-                if (e in self.mapping) and (overwrite is False):
-                    continue
                 self.mapping[e] = self.rev_emoji_desc[desc]
 
-    def fit(self, topn, corpus=None, binary=True, counter=None, verbose=True):
+    def fit(self, topn, corpus=None, binary=True, counter=None, verbose=True,
+            fit_using_e2v=None, boundary=0.72, topn_e2v=20):
         """
         corpus (iter): an iterable object containing strings
         topn (int): The maximum number of token to keep
@@ -189,15 +205,22 @@ class EmojiCluster():
         counter (Counter): A counter containing the count of each emoji in the
         corpus, if passed corpus will be ignored. If None will it be estimated
         on the corpus
+        boundary (float): not used if fit_using_e2v is False. The desired
+        boundary of e2v. See map_emoji
+        topn (int): not used if fit_using_e2v is False. See map_emoji
+
         """
         if (corpus is None) and (counter is None):
             raise ValueError(
                 "corpus need to be specified if no counter is given")
-        if counter is None:
+        elif counter is None:
             emoji_count = create_emoji_count(
                 corpus, binary=binary)
         else:
             emoji_count = counter
+
+        if fit_using_e2v is None:
+            fit_using_e2v = True if self.__use_e2v else False
 
         # collapse using mapping
         emoji_count_ = {}
@@ -210,28 +233,51 @@ class EmojiCluster():
                 emoji_count_[e] = n
         emoji_count_ = Counter(emoji_count_)
 
-        if verbose:
-            n_included = sum(n for e, n in emoji_count_.most_common(topn))
-            p = n_included / sum(emoji_count_.values())
-            print(f"The coverage of the emojis is {round(p, 4)} and include:")
-            df = counter_to_df(emoji_count_)
-            print_emoji_grid(df["Value"][:topn], shape=(20, 10))
-            print(f"Please note that the coverage does not include emoji2vec")
+        self.emoji_count = Counter({e: n for e, n in
+                                    emoji_count_.most_common(topn)})
+
+        if fit_using_e2v:
+            if verbose:
+                print(
+                    "The followed emojis have been matched using e2v (number in the dataset):")
+            for e, n in emoji_count_.items():
+                if e in self.mapping:
+                    e = self.mapping[e]
+                if (e in self.emoji_count) or (e not in self.emoji_desc):
+                    continue
+                e_ = self.map_emoji(e, boundary=boundary, topn=topn_e2v,
+                                    force=True)
+                if e_ is not None:
+                    if verbose:
+                        print(f"{e} = {e_} ({n})")
+                    self.emoji_count[e_] += n
 
         self.__corpus_emoji_count = emoji_count
         self.__corpus_emoji_count_mapped = emoji_count_
-        self.emoji_count = Counter({e: n for e, n in
-                                    emoji_count_.most_common(topn)})
+
+        if verbose:
+            n_included = sum(self.emoji_count.values())
+            p = n_included / sum(emoji_count_.values())
+            print(f"The coverage of the emojis is {round(p, 4)} and include:")
+            df = counter_to_df(self.emoji_count)
+            print_emoji_grid(df["Value"], shape=(20, 10))
+            print(
+                "Please note that the coverage does not include emoji2vec " +
+                "for unseen samples")
         self.isfit = True
 
-    def map_emoji(self, emoji, topn=20, boundary=0.7, print_most_sim=False,
-                  raise_error=False):
+    def map_emoji(self, emoji, topn=20, boundary=0.72, print_most_sim=False,
+                  raise_error=False, force=False):
         """
-        topn (int): 20
-        boundary (float): 0.7
-        print_most_sim (bool): Print most similar
+        topn (int): the number of object it look at when using e2v. It will
+        search through the topn most similar and see if any is below the
+        boundary. If so if the similar output is valid in the fit it will
+        return the given value.
+        boundary (float): the similarity boundary, when using e2v.
+        print_most_sim (bool): Print most similar.
+        force (bool): if true ignore whether the model isfit
         """
-        if self.isfit is False:
+        if (self.isfit is False) and (force is False):
             raise Exception("Emojicluster is not yet fit. Please fit before" +
                             "calling this function")
         if emoji in self.mapping:
@@ -246,9 +292,9 @@ class EmojiCluster():
                 [print(e, "\t", score) for e, score in sim]
 
             for e, score in sim:
-                if (e in self.emoji_count) or \
+                if ((e in self.emoji_count) or
                         (e in self.mapping and
-                            (self.mapping[e] in self.emoji_count)):
+                         (self.mapping[e] in self.emoji_count))):
                     if boundary and (score < boundary):
                         if raise_error:
                             raise Exception(f"Could not replace the emoji ({emoji}) with {e} \
@@ -332,3 +378,12 @@ class EmojiCluster():
 if __name__ == "__main__":
     import doctest
     doctest.testmod(verbose=True)
+
+    # with open("emoji_usage_nordic.json") as f:
+    #     count = json.load(f)
+
+    # ec = EmojiCluster(mapping=["unicode", "color", "flag", "family",
+    #                            "couple with heart", "kiss", "keycap"],
+    #                   ignore=["🇩🇰", "🇳🇴", "🇸🇪", "🇺🇸", "🇪🇺"],
+    #                   verbose=True)
+    # ec.fit(topn=150, corpus=None, counter=count, boundary=0.72)

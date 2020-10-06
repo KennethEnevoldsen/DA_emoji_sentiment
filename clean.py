@@ -12,6 +12,7 @@ import pandas as pd
 from make_corpus import get_filenames, df_gen
 from EmojiCluster import EmojiCluster
 from utils import get_url_regex
+from emoji_utils import create_emoji_count
 
 
 def filter_lang(df, langcol="lang", lang_to_keep={"da", "sv", "no", "en"},
@@ -101,14 +102,12 @@ def main(path="data", save_suf="clustered.json"):
     df = df.reset_index()
     df.to_json(f"{path}/emoji_sent_clustered.json")
 
-    # for i, df in enumerate(dfs):
-    #     if i % 20 == 0:
-    #         with open("matched_emojis.json", "w") as f:
-    #             json.dump({str(k): v for k, v, in ec.mapped_emojis.items()}, f)
-    #     df.to_json(f"{path}/emoji_{i}"+save_suf)
     with open("matched_emojis.json", "w") as f:
         json.dump({str(k): v for k, v, in ec.mapped_emojis.items()}, f)
-
+    with open("emoji_counts.json", "w") as f:
+        json.dump(ec.get_emoji_count(), f)
+    with open("emoji_mapping.json", "w") as f:
+        json.dump(ec.mapping, f)
 
 if __name__ == "__main__":
     main()
