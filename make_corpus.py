@@ -63,7 +63,7 @@ def filter_ids(dfs):
     ids = set()
     for df in dfs:
         df = df.loc[~df["id"].isin(ids)]  # not in
-        df.drop_duplicates(subset="id", keep="first", inplace=False)
+        df = df.drop_duplicates(subset="id", keep="first", inplace=False)
         ids.update(set(df["id"].values))
         yield df
 

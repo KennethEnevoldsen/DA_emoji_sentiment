@@ -1,6 +1,9 @@
 """
 TODO
  - set up datastream
+    - num_parallel_calls til map
+    - add cache?
+    - add oversampling https://github.com/tensorflow/tensorflow/issues/14451
  - make wandb callback
  - set up early stopping
 """

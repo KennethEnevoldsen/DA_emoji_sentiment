@@ -9,7 +9,7 @@ from collections import Counter
 
 import pandas as pd
 
-from make_corpus import get_filenames, df_gen
+from make_corpus import get_filenames, df_gen, filter_ids
 from EmojiCluster import EmojiCluster
 from utils import get_url_regex
 from emoji_utils import create_emoji_count
@@ -88,6 +88,7 @@ def main(path="data", save_suf="clustered.json"):
     #              if f.split(".")[0].split("_")[1] not in sav_files_n]
 
     dfs = df_gen(files, reader=pd.read_json)
+    dfs = filter_ids(dfs)
     dfs = filter_lang(dfs, verbose=False)
     dfs = replace_urls_df(dfs)
 
@@ -95,7 +96,7 @@ def main(path="data", save_suf="clustered.json"):
     ec = EmojiCluster(mapping=["unicode", "color", "flag", "family"],
                       ignore=["🇩🇰", "🇳🇴", "🇸🇪", "🇬🇧", "🇺🇸", "🇪🇺", "🇦🇺", "🇨🇦"])
     count = make_emojicount()
-    ec.fit(topn=150, corpus=None, counter=count)
+    ec.fit(topn=124, corpus=None, counter=count)
 
     dfs = replace_emoji_df(dfs, ec=ec)
     df = pd.concat(list(dfs))
@@ -108,6 +109,7 @@ def main(path="data", save_suf="clustered.json"):
         json.dump(ec.get_emoji_count(), f)
     with open("emoji_mapping.json", "w") as f:
         json.dump(ec.mapping, f)
+
 
 if __name__ == "__main__":
     main()
